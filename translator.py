@@ -99,3 +99,24 @@ def translate_titles(items, langpair: str = "en|ru") -> dict[str, str]:
         if i < len(items) - 1:
             time.sleep(0.3)  # не долбим бесплатные API
     return out
+
+
+def translate_fields(items, langpair: str = "en|ru") -> dict[str, tuple[str, str]]:
+    """Переводит заголовок и краткое описание новостей.
+
+    Возвращает {ключ: (переведённый заголовок, переведённое описание)}.
+    Описание пустое, если в оригинале его не было или перевод не получился.
+    """
+    out: dict[str, tuple[str, str]] = {}
+    for i, it in enumerate(items):
+        key = it.link or it.title
+        title = translate(it.title, langpair)
+        summary = ""
+        if it.summary:
+            candidate = translate(it.summary[:350], langpair)
+            if candidate.lower() != it.summary[:350].lower():
+                summary = candidate
+        out[key] = (title, summary)
+        if i < len(items) - 1:
+            time.sleep(0.3)  # не долбим бесплатные API
+    return out

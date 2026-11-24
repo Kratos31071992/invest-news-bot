@@ -50,7 +50,7 @@ from storage import (
     remove_watch,
     set_digest,
 )
-from translator import translate, translate_titles
+from translator import translate, translate_fields
 
 bot = Bot(
     token=config.BOT_TOKEN,
@@ -149,23 +149,70 @@ def forecast_button() -> InlineKeyboardMarkup:
 
 # ---------- Форматирование ----------
 
-def _fmt_analysis(a, ru_title: str | None = None) -> str:
+def _fmt_time(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%d.%m %H:%M") if ts else ""
+
+
+def _fmt_analysis(a, fields: tuple[str, str] | None = None) -> str:
     icon = _SENTIMENT_ICON[a.sentiment]
     stars = "★" * a.impact if a.impact else "·"
+    ru_title = (fields or (None, None))[0]
+    ru_summary = (fields or (None, None))[1]
     title = escape(ru_title or a.item.title)
     foreign = " 🌐" if a.item.source in EN_SOURCES else ""
-    return (
-        f"{icon} <b>{title}</b> [{stars}]\n"
-        f"{escape(a.item.source)}{foreign} — <a href=\"{escape(a.item.link, quote=True)}\">читать</a>"
-    )
+    when = _fmt_time(a.item.published_ts)
+    head = f"{icon} <b>{title}</b> [{stars}]"
+    if when:
+        head += f" <i>· {when}</i>"
+    lines = [head]
+    if ru_summary:
+        short = ru_summary if len(ru_summary) <= 220 else ru_summary[:217].rsplit(" ", 1)[0] + "…"
+        lines.append(escape(short))
+    lines.append(f"{escape(a.item.source)}{foreign} — <a href=\"{escape(a.item.link, quote=True)}\">читать</a>")
+    return "\n".join(lines)
 
 
-async def _translate_for_display(analyses) -> dict[str, str]:
-    """Переводит заголовки зарубежных новостей из списка (в отдельном потоке)."""
+async def _translate_for_display(analyses) -> dict[str, tuple[str, str]]:
+    """Переводит заголовки и описания зарубежных новостей (в отдельном потоке)."""
     en_items = [a.item for a in analyses if a.item.source in EN_SOURCES]
     if not en_items:
         return {}
-    return await asyncio.to_thread(translate_titles, en_items)
+    return await asyncio.to_thread(translate_fields, en_items)
+
+
+_LIMIT = 4000  # лимит Telegram на длину сообщения
+
+
+def _chunks(text: str) -> list[str]:
+    """Разбивает длинный текст на части по границам абзацев."""
+    if len(text) <= _LIMIT:
+        return [text]
+    out: list[str] = []
+    rest = text
+    while len(rest) > _LIMIT:
+        cut = rest.rfind("\n\n", 0, _LIMIT)
+        if cut < _LIMIT // 2:
+            cut = rest.rfind(" ", 0, _LIMIT)
+        if cut <= 0:
+            cut = _LIMIT
+        out.append(rest[:cut])
+        rest = rest[cut:].lstrip("\n")
+    out.append(rest)
+    return out
+
+
+async def _reply_long(target: Message, first: Message, text: str):
+    """Отправляет текст, разбивая на части, если не влезает в одно сообщение."""
+    parts = _chunks(text)
+    await first.edit_text(parts[0])
+    for ch in parts[1:]:
+        await target.answer(ch)
+
+
+async def _send_long(chat_id: int, text: str):
+    """То же для отправки без edit (фоновые рассылки: дайджест, алерты)."""
+    for ch in _chunks(text):
+        await bot.send_message(chat_id, ch)
 
 
 HELP = (
@@ -202,7 +249,12 @@ async def make_digest() -> str | None:
 
 async def show_news(target: Message, count: int = 6):
     wait = await target.answer("⏳ Собираю и анализирую новости (зарубежные перевожу)…")
-    items = await asyncio.to_thread(fetch_news, None, 10)
+    items = await asyncio.to_thread(fetch_news, None, 12)
+    # свежесть: берём новости не старше 2 суток; если таких мало — не фильтруем
+    cutoff = datetime.now().timestamp() - 48 * 3600
+    fresh = [i for i in items if i.published_ts >= cutoff]
+    if len(fresh) >= count:
+        items = fresh
     analyses = analyze_items(items)[:count]
     if not analyses:
         await wait.edit_text("Не удалось получить новости, попробуйте позже.")
@@ -211,7 +263,7 @@ async def show_news(target: Message, count: int = 6):
     text = "🗞 <b>Свежие новости и оценка:</b>\n\n" + "\n\n".join(
         _fmt_analysis(a, titles.get(a.item.link or a.item.title)) for a in analyses
     )
-    await wait.edit_text(text + DISCLAIMER)
+    await _reply_long(message, wait, text + DISCLAIMER)
 
 
 async def _search_bilingual(query: str, en_query: str | None):
@@ -238,7 +290,7 @@ async def run_analysis(target: Message, query: str, en_query: str | None = None,
         top = "\n\n📌 Топ-новостей:\n" + "\n".join(
             _fmt_analysis(a, titles.get(a.item.link or a.item.title)) for a in analyses[:3]
         )
-        await wait.edit_text(header + top + DISCLAIMER)
+        await _reply_long(target, wait, header + top + DISCLAIMER)
         _LAST_ANALYSIS[target.chat.id] = (query, en_query, shown)
         await target.answer("Хотите прогноз по этой теме?", reply_markup=forecast_button())
         return
@@ -257,7 +309,7 @@ async def run_analysis(target: Message, query: str, en_query: str | None = None,
         + "\n\n📌 Наиболее значимые новости:\n"
         + "\n\n".join(_fmt_analysis(a, titles.get(a.item.link or a.item.title)) for a in top5)
     )
-    await wait.edit_text(text + DISCLAIMER)
+    await _reply_long(target, wait, text + DISCLAIMER)
     _LAST_ANALYSIS[target.chat.id] = (query, en_query, shown)
     await target.answer("Хотите прогноз по этой теме?", reply_markup=forecast_button())
 
@@ -598,7 +650,7 @@ async def digest_loop():
                     if text:
                         for chat_id in users:
                             try:
-                                await bot.send_message(chat_id, text)
+                                await _send_long(chat_id, text)
                             except Exception as exc:  # noqa: BLE001
                                 print(f"[warn] дайджест не доставлен {chat_id}: {exc}")
                     last_sent_date = today

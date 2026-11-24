@@ -110,6 +110,33 @@ def _parse_rss(xml_bytes: bytes, source_name: str, limit: int) -> list[NewsItem]
     return items
 
 
+def _title_tokens(title: str) -> set[str]:
+    return set(re.findall(r"[a-zа-яё0-9]+", (title or "").lower()))
+
+
+def dedup_items(items: list[NewsItem], threshold: float = 0.55) -> list[NewsItem]:
+    """Убирает дубли одной новости из разных источников.
+
+    Сравнивает множества слов заголовков (Жаккарда ≥ threshold) — так
+    ловятся варианты вроде «Цены на нефть выросли» / «Нефть дорожает».
+    Порядок входного списка сохраняется: остаётся первая (самая свежая) версия.
+    """
+    kept: list[NewsItem] = []
+    token_sets: list[set[str]] = []
+    for it in items:
+        tokens = _title_tokens(it.title)
+        if not tokens:
+            continue
+        if any(
+            len(tokens & prev) / len(tokens | prev) >= threshold
+            for prev in token_sets
+        ):
+            continue
+        kept.append(it)
+        token_sets.append(tokens)
+    return kept
+
+
 def fetch_news(
     source_names: list[str] | None = None,
     per_source: int = 15,
@@ -118,6 +145,7 @@ def fetch_news(
     """Скачивает свежие новости из указанных (или всех) источников.
 
     Сбой одного источника не ломает остальные — он просто пропускается.
+    Дубли одной новости из разных СМИ склеиваются (dedup_items).
     """
     if source_names is not None:
         names = source_names
@@ -133,7 +161,7 @@ def fetch_news(
         except Exception as exc:  # noqa: BLE001 — логируем и идём дальше
             print(f"[warn] источник '{name}' недоступен: {exc}")
     collected.sort(key=lambda n: n.published_ts or 0, reverse=True)
-    return collected
+    return dedup_items(collected)
 
 
 def search_news(
