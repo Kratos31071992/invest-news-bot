@@ -22,6 +22,7 @@ from html import escape
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import LinkPreviewOptions
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -51,7 +52,15 @@ from storage import (
 )
 from translator import translate, translate_titles
 
-bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(
+    token=config.BOT_TOKEN,
+    default=DefaultBotProperties(
+        parse_mode=ParseMode.HTML,
+        # без карточек-превью ссылок: на телефоне под сообщением Telegram
+        # иначе рисует оригинальный английский заголовок статьи
+        link_preview=LinkPreviewOptions(is_disabled=True),
+    ),
+)
 dp = Dispatcher()
 
 DISCLAIMER = "\n\n<i>⚠️ Это аналитическая сводка, а не инвестиционная рекомендация.</i>"
