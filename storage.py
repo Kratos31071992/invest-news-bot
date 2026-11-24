@@ -4,7 +4,10 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "bot_data.sqlite3"
+# На Amvera постоянное хранилище примонтировано в /data — кладём базу туда,
+# чтобы подписки и кэш переводов не стирались при перезапуске приложения.
+_DATA_DIR = Path("/data") if Path("/data").is_dir() else Path(__file__).parent
+DB_PATH = _DATA_DIR / "bot_data.sqlite3"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS watch (
