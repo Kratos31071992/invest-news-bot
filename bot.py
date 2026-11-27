@@ -263,7 +263,7 @@ async def show_news(target: Message, count: int = 6):
     text = "🗞 <b>Свежие новости и оценка:</b>\n\n" + "\n\n".join(
         _fmt_analysis(a, titles.get(a.item.link or a.item.title)) for a in analyses
     )
-    await _reply_long(message, wait, text + DISCLAIMER)
+    await _reply_long(target, wait, text + DISCLAIMER)
 
 
 async def _search_bilingual(query: str, en_query: str | None):
